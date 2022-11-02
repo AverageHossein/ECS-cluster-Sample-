@@ -2,7 +2,7 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 4.0"
+      version = "~> 3.74"
     }
   }
 }
@@ -12,7 +12,7 @@ resource "aws_ecr_repository" "ecr" {
 }
 
 resource "aws_cloudwatch_log_group" "task_definition_log_group" {
-    name = "${var.app_name}-task-log-group"
+  name = "${var.app_name}-task-log-group"
 }
 
 
@@ -25,6 +25,7 @@ resource "aws_ecs_cluster" "ecs_cluster" {
 
   configuration {
     execute_command_configuration {
+      logging = "OVERRIDE"
       log_configuration {
         cloud_watch_log_group_name = aws_cloudwatch_log_group.cluster_log_group.name
       }
@@ -42,13 +43,13 @@ resource "aws_ecs_task_definition" "ecs_task" {
       "name": "${var.app_name}-container",
       "image": "${aws_ecr_repository.ecr.repository_url}:latest",
       "entryPoint": [],
-      "environment": ${data.template_file.env_vars.rendered},
+      "environment": [{"name": "env", "value": "qa"}],
       "essential": true,
       "logConfiguration": {
         "logDriver": "awslogs",
         "options": {
           "awslogs-group": "${aws_cloudwatch_log_group.task_definition_log_group.id}",
-          "awslogs-region": "${data.aws_region.current}",
+          "awslogs-region": "${data.aws_region.current.name}",
           "awslogs-stream-prefix": "${var.app_name}"
         }
       },
@@ -85,10 +86,10 @@ resource "aws_ecs_service" "ecs_service" {
   force_new_deployment = true
 
   network_configuration {
-    subnets          = data.aws_subnets.private.ids
+    subnets          = aws_subnet.private_subnet.*.id
     assign_public_ip = false
     security_groups = [
-      aws_security_group.service_security_group.id,
+      aws_security_group.security_group.id,
       aws_security_group.load_balancer_security_group.id
     ]
   }
@@ -102,61 +103,18 @@ resource "aws_ecs_service" "ecs_service" {
   depends_on = [aws_lb_listener.listener]
 }
 
-resource "aws_security_group" "service_security_group" {
-  vpc_id = data.aws_vpc.selected.id
-
-  ingress {
-    from_port       = 0
-    to_port         = 0
-    protocol        = "-1"
-    security_groups = [aws_security_group.load_balancer_security_group.id]
-  }
-
-  egress {
-    from_port        = 0
-    to_port          = 0
-    protocol         = "-1"
-    cidr_blocks      = ["0.0.0.0/0"]
-    ipv6_cidr_blocks = ["::/0"]
-  }
-
-  tags = {
-    Name        = "${var.app_name}-service-sg"
-  }
-}
 
 resource "aws_alb" "application_load_balancer" {
   name               = "${var.app_name}-alb"
   internal           = false
   load_balancer_type = "application"
-  subnets            = data.aws_subnets.public.ids
+  subnets            = aws_subnet.public_subnet.*.id
   security_groups    = [aws_security_group.load_balancer_security_group.id]
-
+  depends_on = [
+    aws_subnet.public_subnet
+  ]
   tags = {
-    Name        = "${var.app_name}-alb"
-  }
-}
-
-resource "aws_security_group" "load_balancer_security_group" {
-  vpc_id = data.aws_vpc.selected.id
-
-  ingress {
-    from_port        = 80
-    to_port          = 80
-    protocol         = "tcp"
-    cidr_blocks      = ["0.0.0.0/0"]
-    ipv6_cidr_blocks = ["::/0"]
-  }
-
-  egress {
-    from_port        = 0
-    to_port          = 0
-    protocol         = "-1"
-    cidr_blocks      = ["0.0.0.0/0"]
-    ipv6_cidr_blocks = ["::/0"]
-  }
-  tags = {
-    Name        = "${var.app_name}-sg"
+    Name = "${var.app_name}-alb"
   }
 }
 
@@ -165,7 +123,7 @@ resource "aws_lb_target_group" "target_group" {
   port        = 80
   protocol    = "HTTP"
   target_type = "ip"
-  vpc_id      = data.aws_vpc.selected.id
+  vpc_id      = aws_vpc.vpc.id
 
   health_check {
     healthy_threshold   = "3"
@@ -178,7 +136,7 @@ resource "aws_lb_target_group" "target_group" {
   }
 
   tags = {
-    Name        = "${var.app_name}-lb-tg"
+    Name = "${var.app_name}-lb-tg"
   }
 }
 
